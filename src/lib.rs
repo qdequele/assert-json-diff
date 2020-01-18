@@ -197,7 +197,7 @@ macro_rules! assert_json_include {
         let actual: serde_json::Value = $actual;
         let expected: serde_json::Value = $expected;
         let comparison = Comparison::Include(Actual::new(actual), Expected::new(expected));
-        if let Err(error) = $crate::assert_json_no_panic(comparison) {
+        if let Err(error) = $crate::assert_json_no_panic(comparison, true) {
             panic!("\n\n{}\n\n", error);
         }
     }};
@@ -224,12 +224,22 @@ macro_rules! assert_json_eq {
         let lhs: serde_json::Value = $lhs;
         let rhs: serde_json::Value = $rhs;
         let comparison = Comparison::Exact(lhs, rhs);
-        if let Err(error) = $crate::assert_json_no_panic(comparison) {
+        if let Err(error) = $crate::assert_json_no_panic(comparison, true) {
             panic!("\n\n{}\n\n", error);
         }
     }};
     ($lhs:expr, $rhs:expr,) => {{
         $crate::assert_json_eq!($lhs, $rhs)
+    }};
+    ($lhs:expr, $rhs:expr, ordered: $ordered:expr) => {{
+        use $crate::{Actual, Comparison, Expected};
+        let lhs: serde_json::Value = $lhs;
+        let rhs: serde_json::Value = $rhs;
+        let ordered: bool = $ordered;
+        let comparison = Comparison::Exact(lhs, rhs);
+        if let Err(error) = $crate::assert_json_no_panic(comparison, ordered) {
+            panic!("\n\n{}\n\n", error);
+        }
     }};
 }
 
@@ -237,7 +247,7 @@ macro_rules! assert_json_eq {
 ///
 /// The [macros](index.html#macros) call this function and panics if the result is an `Err(_)`
 #[doc(hidden)]
-pub fn assert_json_no_panic(comparison: Comparison) -> Result<(), String> {
+pub fn assert_json_no_panic(comparison: Comparison, ordered: bool) -> Result<(), String> {
     let mut errors = MatchErrors::default();
     match comparison {
         Comparison::Include(actual, expected) => {
@@ -245,7 +255,7 @@ pub fn assert_json_no_panic(comparison: Comparison) -> Result<(), String> {
         }
 
         Comparison::Exact(lhs, rhs) => {
-            exact_match_at_path(lhs, rhs, Path::Root, &mut errors);
+            exact_match_at_path(lhs, rhs, Path::Root, &mut errors, ordered);
         }
     }
     errors.into_output()
@@ -400,7 +410,15 @@ fn match_with_keys<
     }
 }
 
-fn exact_match_at_path(lhs: Value, rhs: Value, path: Path, errors: &mut MatchErrors) {
+fn exact_match_at_path(lhs: Value, rhs: Value, path: Path, errors: &mut MatchErrors, ordered: bool) {
+    if ordered {
+        exact_match_at_path_ordered(lhs, rhs, path, errors);
+    } else {
+        exact_match_at_path_unordered(lhs, rhs, path, errors);
+    }
+}
+
+fn exact_match_at_path_ordered(lhs: Value, rhs: Value, path: Path, errors: &mut MatchErrors) {
     if let (Some(lhs), Some(rhs)) = (lhs.as_object(), rhs.as_object()) {
         let keys = lhs
             .keys()
@@ -408,7 +426,7 @@ fn exact_match_at_path(lhs: Value, rhs: Value, path: Path, errors: &mut MatchErr
             .map(|s| s.to_string())
             .collect::<HashSet<String>>();
 
-        exact_match_with_keys(keys.iter(), lhs, rhs, path, errors);
+        exact_match_with_keys(keys.iter(), lhs, rhs, path, errors, true);
     } else if let (Some(lhs), Some(rhs)) = (lhs.as_array(), rhs.as_array()) {
         let lhs_keys = lhs.indexes();
         let rhs_keys = rhs.indexes();
@@ -417,8 +435,55 @@ fn exact_match_at_path(lhs: Value, rhs: Value, path: Path, errors: &mut MatchErr
             .chain(rhs_keys.iter())
             .cloned()
             .collect::<HashSet<usize>>();
+        exact_match_with_keys(keys.iter(), lhs, rhs, path, errors, true);
+    } else if lhs != rhs {
+        errors.push(ErrorType::NotEq(
+            Either::Right((lhs.clone(), rhs.clone())),
+            path,
+        ));
+    }
+}
 
-        exact_match_with_keys(keys.iter(), lhs, rhs, path, errors);
+fn exact_match_at_path_unordered(lhs: Value, rhs: Value, path: Path, errors: &mut MatchErrors) {
+    if let (Some(lhs), Some(rhs)) = (lhs.as_object(), rhs.as_object()) {
+        let keys = lhs
+            .keys()
+            .chain(rhs.keys())
+            .map(|s| s.to_string())
+            .collect::<HashSet<String>>();
+
+        exact_match_with_keys(keys.iter(), lhs, rhs, path, errors, false);
+    } else if let (Some(lhs_arr), Some(rhs_arr)) = (lhs.as_array(), rhs.as_array()) {
+        if lhs_arr.len() != rhs_arr.len() {
+            errors.push(ErrorType::NotEq(
+                Either::Right((lhs.clone(), rhs.clone())),
+                path,
+            ));
+            return
+        }
+        match lhs_arr[0] {
+            Value::Number(_) | Value::String(_) =>  {
+                for key in lhs_arr {
+                    if !rhs_arr.contains(&key) {
+                        errors.push(ErrorType::NotEq(
+                            Either::Right((lhs.clone(), rhs.clone())),
+                            path,
+                        ));
+                        return
+                    }
+                }
+            },
+            _ => {
+                let lhs_keys = lhs_arr.indexes();
+                let rhs_keys = rhs_arr.indexes();
+                let keys = lhs_keys
+                    .iter()
+                    .chain(rhs_keys.iter())
+                    .cloned()
+                    .collect::<HashSet<usize>>();
+                exact_match_with_keys(keys.iter(), lhs_arr, rhs_arr, path, errors, false);
+            }
+        }
     } else if lhs != rhs {
         errors.push(ErrorType::NotEq(
             Either::Right((lhs.clone(), rhs.clone())),
@@ -438,6 +503,7 @@ fn exact_match_with_keys<
     rhs: &ValueCollection,
     path: Path,
     errors: &mut MatchErrors,
+    ordered: bool
 ) {
     for key in keys {
         match (lhs.get(key), rhs.get(key)) {
@@ -447,6 +513,7 @@ fn exact_match_with_keys<
                     rhs.clone(),
                     path.dot(key),
                     errors,
+                    ordered
                 );
             }
 
@@ -975,11 +1042,11 @@ mod tests {
 
     fn test_partial_match(actual: Actual, expected: Expected) -> Result<(), String> {
         let comparison = Comparison::Include(actual, expected);
-        assert_json_no_panic(comparison)
+        assert_json_no_panic(comparison, true)
     }
 
     fn test_exact_match(lhs: Value, rhs: Value) -> Result<(), String> {
         let comparison = Comparison::Exact(lhs, rhs);
-        assert_json_no_panic(comparison)
+        assert_json_no_panic(comparison, true)
     }
 }

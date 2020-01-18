@@ -46,3 +46,8 @@ fn can_pass_with_exact_match() {
 fn can_fail_with_exact_match() {
     assert_json_eq!(json!({ "a": { "b": true } }), json!({ "a": {} }));
 }
+
+#[test]
+fn can_pass_with_partial_match() {
+    assert_json_eq!(json!({ "a": ["a", "b"] }), json!({ "a": ["b", "a"] }));
+}
