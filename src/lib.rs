@@ -410,7 +410,13 @@ fn match_with_keys<
     }
 }
 
-fn exact_match_at_path(lhs: Value, rhs: Value, path: Path, errors: &mut MatchErrors, ordered: bool) {
+fn exact_match_at_path(
+    lhs: Value,
+    rhs: Value,
+    path: Path,
+    errors: &mut MatchErrors,
+    ordered: bool,
+) {
     if ordered {
         exact_match_at_path_ordered(lhs, rhs, path, errors);
     } else {
@@ -459,29 +465,31 @@ fn exact_match_at_path_unordered(lhs: Value, rhs: Value, path: Path, errors: &mu
                 Either::Right((lhs.clone(), rhs.clone())),
                 path,
             ));
-            return
+            return;
         }
-        match lhs_arr[0] {
-            Value::Number(_) | Value::String(_) =>  {
-                for key in lhs_arr {
-                    if !rhs_arr.contains(&key) {
-                        errors.push(ErrorType::NotEq(
-                            Either::Right((lhs.clone(), rhs.clone())),
-                            path,
-                        ));
-                        return
+        if !lhs_arr.is_empty() {
+            match lhs_arr[0] {
+                Value::Number(_) | Value::String(_) => {
+                    for key in lhs_arr {
+                        if !rhs_arr.contains(&key) {
+                            errors.push(ErrorType::NotEq(
+                                Either::Right((lhs.clone(), rhs.clone())),
+                                path,
+                            ));
+                            return;
+                        }
                     }
                 }
-            },
-            _ => {
-                let lhs_keys = lhs_arr.indexes();
-                let rhs_keys = rhs_arr.indexes();
-                let keys = lhs_keys
-                    .iter()
-                    .chain(rhs_keys.iter())
-                    .cloned()
-                    .collect::<HashSet<usize>>();
-                exact_match_with_keys(keys.iter(), lhs_arr, rhs_arr, path, errors, false);
+                _ => {
+                    let lhs_keys = lhs_arr.indexes();
+                    let rhs_keys = rhs_arr.indexes();
+                    let keys = lhs_keys
+                        .iter()
+                        .chain(rhs_keys.iter())
+                        .cloned()
+                        .collect::<HashSet<usize>>();
+                    exact_match_with_keys(keys.iter(), lhs_arr, rhs_arr, path, errors, false);
+                }
             }
         }
     } else if lhs != rhs {
@@ -503,18 +511,12 @@ fn exact_match_with_keys<
     rhs: &ValueCollection,
     path: Path,
     errors: &mut MatchErrors,
-    ordered: bool
+    ordered: bool,
 ) {
     for key in keys {
         match (lhs.get(key), rhs.get(key)) {
             (Some(lhs), Some(rhs)) => {
-                exact_match_at_path(
-                    lhs.clone(),
-                    rhs.clone(),
-                    path.dot(key),
-                    errors,
-                    ordered
-                );
+                exact_match_at_path(lhs.clone(), rhs.clone(), path.dot(key), errors, ordered);
             }
 
             (Some(_), None) => {

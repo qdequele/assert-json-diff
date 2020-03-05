@@ -49,5 +49,10 @@ fn can_fail_with_exact_match() {
 
 #[test]
 fn can_pass_with_partial_match() {
-    assert_json_eq!(json!({ "a": ["a", "b"] }), json!({ "a": ["b", "a"] }));
+    assert_json_eq!(json!({ "a": ["a", "b"] }), json!({ "a": ["b", "a"] }), ordered: false);
+}
+
+#[test]
+fn can_pass_with_empty_vec() {
+    assert_json_eq!(json!({ "a": [] }), json!({ "a": [] }), ordered: false);
 }
